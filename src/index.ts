@@ -1,181 +1,112 @@
-import { Octokit } from '@octokit/rest';
-import dotenv from 'dotenv';
+import { Octokit, RestEndpointMethodTypes } from "@octokit/rest";
+import dotenv from "dotenv";
 
-// Load environment variables
-dotenv.config();
+type Commit =
+  RestEndpointMethodTypes["pulls"]["listCommits"]["response"]["data"][number];
 
-// Initialize Octokit with your GitHub token
-const octokit = new Octokit({
-  auth: process.env.GITHUB_TOKEN
-});
-
-interface CommitCount {
-  [author: string]: number;
-}
-
-interface CommitResult {
-  counts: CommitCount;
-  processedPRs: number[];
-}
-
-async function countCommitsByAuthor(
-  owner: string,
-  repo: string,
-  pullNumber: number
-): Promise<CommitCount> {
-  try {
-    // Get all commits for the PR
-    const { data: commits } = await octokit.pulls.listCommits({
-      owner,
-      repo,
-      pull_number: pullNumber,
-      per_page: 100 // Adjust if you expect more than 100 commits
-    });
-
-    // Count commits by author
-    const commitCount: CommitCount = {};
-    
-    for (const commit of commits) {
-      const authorLogin = commit.author?.login || 'unknown';
-      
-      if (!commitCount[authorLogin]) {
-        commitCount[authorLogin] = 0;
-      }
-      
-      commitCount[authorLogin]++;
-    }
-    
-    return commitCount;
-  } catch (error) {
-    console.error('Error fetching commits:', error);
-    throw error;
-  }
-}
-
-/**
- * Count commits by author in a PR, including commits from squashed PRs
- * Recursively processes PRs referenced in commit messages with pattern (#number)
- */
-async function countCommitsByAuthorWithSquashedPRs(
-  owner: string,
-  repo: string,
-  pullNumber: number
-): Promise<CommitResult> {
-  const processedPRs = new Set<number>([pullNumber]);
-  const counts = await countCommitsByAuthorRecursive(owner, repo, pullNumber, processedPRs);
-  
-  return { 
-    counts, 
-    processedPRs: Array.from(processedPRs) 
-  };
-}
-
-/**
- * Recursively count commits by author in a PR and any referenced PRs
- */
-async function countCommitsByAuthorRecursive(
-  owner: string,
-  repo: string,
-  pullNumber: number,
-  processedPRs: Set<number>
-): Promise<CommitCount> {
-  try {
-    // Get direct commits for this PR
-    const { data: commits } = await octokit.pulls.listCommits({
-      owner,
-      repo,
-      pull_number: pullNumber,
-      per_page: 100
-    });
-    
-    // Count commits by author
-    const commitCount: CommitCount = {};
-    
-    for (const commit of commits) {
-      const authorLogin = commit.author?.login || 'unknown';
-      const message = commit.commit.message.trim();
-      
-      if (!commitCount[authorLogin]) {
-        commitCount[authorLogin] = 0;
-      }
-      
-      commitCount[authorLogin]++;
-      
-      // Check if this is a squashed commit by looking for (#number) pattern
-      // The pattern can be anywhere in the message, not just at the end
-      const squashMatch = message.match(/\(#(\d+)\)/);
-      
-      
-      if (squashMatch) {
-        const referencedPR = parseInt(squashMatch[1], 10);
-        
-        // Skip if we've already processed this PR
-        if (!processedPRs.has(referencedPR)) {
-          processedPRs.add(referencedPR);
-          
-          try {
-            // Process the referenced PR recursively
-            
-            // Recursively get commits from the referenced PR
-            const nestedCounts = await countCommitsByAuthorRecursive(
-              owner,
-              repo,
-              referencedPR,
-              processedPRs
-            );
-            
-            // Merge the counts
-            for (const [author, count] of Object.entries(nestedCounts)) {
-              commitCount[author] = (commitCount[author] || 0) + count;
-            }
-          } catch (error) {
-            const errorMessage = error instanceof Error ? error.message : String(error);
-            console.warn(`Could not process referenced PR #${referencedPR}: ${errorMessage}`);
-          }
-        }
-      }
-    }
-    
-    return commitCount;
-  } catch (error) {
-    const errorMessage = error instanceof Error ? error.message : String(error);
-    console.error(`Error processing PR #${pullNumber}: ${errorMessage}`);
-    return {};
-  }
-}
-
-// Example usage
 async function main() {
-  // Get command line arguments
+  // Load environment variables from .env file
+  dotenv.config();
+
+  // Initialize GitHub API client with authentication token
+  const octokit = new Octokit({
+    auth: process.env.GITHUB_TOKEN,
+  });
+
+  // Extract command line arguments
   const owner = process.argv[2];
   const repo = process.argv[3];
-  const pullNumber = parseInt(process.argv[4], 10);
-  
-  if (!owner || !repo || isNaN(pullNumber)) {
-    console.error('Usage: npm start -- <owner> <repo> <pull-number>');
+  const pr = parseInt(process.argv[4], 10);
+
+  // Validate required arguments
+  if (!owner || !repo || isNaN(pr)) {
+    console.error("Usage: npm start -- <owner> <repo> <pull-number>");
+
     process.exit(1);
   }
-  
-  try {
-    const result = await countCommitsByAuthorWithSquashedPRs(owner, repo, pullNumber);
-    
-    console.log(`Commit counts for PR #${pullNumber} in ${owner}/${repo}:`);
-    
-    // Sort authors by commit count (descending)
-    const sortedAuthors = Object.entries(result.counts)
-      .sort(([, countA], [, countB]) => countB - countA);
-    
-    for (const [author, count] of sortedAuthors) {
-      console.log(`${author}: ${count} commits`);
+
+  const commits: Commit[] = [];
+  const processedPrs = new Set<number>();
+  const remainingPrs: number[] = [pr];
+
+  // Track pagination
+  let page = 1;
+
+  console.log(`Starting to fetch commits for PR #${pr} in ${owner}/${repo}`);
+
+  // Process all PRs in the queue
+  while (remainingPrs.length > 0) {
+    const currentPr = remainingPrs[0];
+
+    // Skip if we've already processed this PR
+    if (processedPrs.has(currentPr)) {
+      console.log(`PR #${currentPr} already processed, skipping`);
+
+      remainingPrs.shift();
+      continue;
     }
-    
-    if (result.processedPRs.length > 1) {
-      console.log(`\nIncluded commits from these PRs: ${result.processedPRs.join(', ')}`);
+
+    console.log(`Fetching commits for PR #${currentPr}, page ${page}`);
+
+    // Get commits for the current PR
+    const response = await octokit.pulls.listCommits({
+      owner,
+      repo,
+      pull_number: currentPr,
+      per_page: 100,
+      page,
+    });
+
+    // If no commits on this page, move to next PR
+    if (response.data.length === 0) {
+      console.log(`No more commits found for PR #${currentPr}`);
+
+      processedPrs.add(currentPr);
+      page = 1;
+      remainingPrs.shift();
+      continue;
     }
-  } catch (error) {
-    console.error('Failed to count commits:', error);
-    process.exit(1);
+
+    console.log(
+      `Found ${response.data.length} commits on page ${page} for PR #${currentPr}`
+    );
+
+    for (let i = 0; i < response.data.length; i++) {
+      const commit = response.data[i];
+      console.log(`Processing commit: ${commit.sha.substring(0, 7)}`);
+
+      // Check if commit message references another PR (squash merge)
+      const squashMatch = commit.commit.message
+        .split("\n")[0]
+        .match(/(?:\(#|\s#)(\d+)(?:\)|$)/);
+
+      if (squashMatch) {
+        const squashPr = parseInt(squashMatch[1], 10);
+        console.log(
+          `Commit ${commit.sha.substring(
+            0,
+            7
+          )} references PR #${squashPr}, adding to queue`
+        );
+        remainingPrs.push(squashPr);
+      } else {
+        // Add non-reference commit to our collection
+        commits.push(commit);
+        console.log(
+          `Added commit ${commit.sha.substring(0, 7)} by ${
+            commit.author?.login || "unknown"
+          }`
+        );
+      }
+    }
+
+    // Move to next page
+    page++;
   }
+
+  console.log(
+    `Found a total of ${commits.length} unique commits across all related PRs`
+  );
 }
 
 main();
