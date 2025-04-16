@@ -75,6 +75,17 @@ async function main() {
       const commit = response.data[i];
       console.log(`Processing commit: ${commit.sha.substring(0, 7)}`);
 
+      // Skip merge commits (commits with multiple parents)
+      if (commit.parents.length > 1) {
+        console.log(
+          `Skipping merge commit ${commit.sha.substring(0, 7)} with ${
+            commit.parents.length
+          } parents`
+        );
+
+        continue;
+      }
+
       // Check if commit message references another PR (squash merge)
       const squashMatch = commit.commit.message
         .split("\n")[0]
