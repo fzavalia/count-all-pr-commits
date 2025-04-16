@@ -1,4 +1,4 @@
-# Count Commits
+# Count All PR Commits
 
 A TypeScript utility to count how many commits an author has in a GitHub Pull Request, including commits from squashed PRs.
 
