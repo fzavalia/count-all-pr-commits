@@ -107,6 +107,19 @@ async function main() {
   console.log(
     `Found a total of ${commits.length} unique commits across all related PRs`
   );
+
+  // Group commits by author
+  const commitsByAuthor = commits.reduce((acc, commit) => {
+    const author = commit.author?.login || "unknown";
+    acc[author] = (acc[author] || 0) + 1;
+    return acc;
+  }, {} as Record<string, number>);
+
+  // Print results
+  console.log("\nCommits by author:");
+  for (const [author, count] of Object.entries(commitsByAuthor)) {
+    console.log(`${author}: ${count}`);
+  }
 }
 
 main();
