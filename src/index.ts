@@ -105,7 +105,7 @@ async function main() {
   }
 
   console.log(
-    `Found a total of ${commits.length} unique commits across all related PRs`
+    `\nFound a total of ${commits.length} unique commits across all related PRs`
   );
 
   // Group commits by author
@@ -115,11 +115,19 @@ async function main() {
     return acc;
   }, {} as Record<string, number>);
 
+  // Sort authors by commit count (descending)
+  const sortedAuthors = Object.entries(commitsByAuthor).sort(
+    (a, b) => b[1] - a[1]
+  );
+
   // Print results
   console.log("\nCommits by author:");
-  for (const [author, count] of Object.entries(commitsByAuthor)) {
-    console.log(`${author}: ${count}`);
-  }
+  console.table(
+    sortedAuthors.reduce((acc, [author, count]) => {
+      acc[author] = { Commits: count };
+      return acc;
+    }, {} as Record<string, { Commits: number }>)
+  );
 }
 
 main();
